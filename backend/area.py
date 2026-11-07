@@ -1,6 +1,11 @@
-"""On-demand area data: walk graph, shade casters (buildings/trees), elevation.
+"""Area data: walk graph, shade casters (buildings/trees), elevation.
 
-Each area is keyed by rounded lat/lng + radius bucket. The three downloads run in
+Preset areas (e.g. Pittsburgh/Oakland) are prebuilt offline from an OSM extract by
+build_preset.py and committed under backend/data/, so routes inside them never touch
+Overpass. Starts outside every preset are rejected unless NOVA_ALLOW_LIVE=1, in which
+case the live, on-demand path below is used.
+
+Live areas is keyed by rounded lat/lng + radius bucket. The three downloads run in
 parallel as futures so a request can use whatever finished before its deadline,
 while slower pieces keep going in the background and land in the cache for the
 next request. Finished areas are pickled to disk so a warmed cache survives restarts.
@@ -8,6 +13,7 @@ next request. Finished areas are pickled to disk so a warmed cache survives rest
 
 from __future__ import annotations
 
+import gzip
 import logging
 import math
 import os
@@ -47,6 +53,19 @@ OVERPASS_MIRRORS = [
     "https://overpass.private.coffee/api",
     "https://overpass.kumi.systems/api",
 ]
+DATA_DIR = os.path.join(os.path.dirname(__file__), "data")
+PRESETS = [
+    {
+        "name": "pittsburgh-oakland",
+        "label": "Pittsburgh: Oakland, Shadyside, Squirrel Hill",
+        "lat": 40.4433,
+        "lng": -79.9436,
+        "radius": 3500,
+    },
+]
+PRESET_EDGE_MARGIN_M = 400  # starts this close to the edge leave too little room for a loop
+ALLOW_LIVE = os.environ.get("NOVA_ALLOW_LIVE") == "1"
+
 RADIUS_BUCKET_M = 500
 CASTER_NEAR_EDGE_M = 40  # only cast shadows from things this close to a walkable edge
 DEFAULT_LEVEL_H = 3.2
@@ -54,7 +73,7 @@ DEFAULT_BUILDING_H = 9.0
 TREE_H = 8.0
 TREE_CROWN_R = 4.0
 MAX_SHADOW_M = 250
-ELEV_GRID_N = 14  # 196 points -> 2 API calls
+ELEV_GRID_N = 14  # live areas: 196 points -> 2 API calls
 
 _pool = ThreadPoolExecutor(max_workers=12)
 _lock = threading.Lock()
@@ -132,6 +151,14 @@ def _overpass(fn, *args, **kwargs):
 def _build_graph(lat: float, lng: float, radius: float) -> nx.Graph:
     t = time.time()
     G = _overpass(ox.graph_from_point, (lat, lng), dist=radius, network_type="walk", simplify=True)
+    U = to_routing_graph(G)
+    log.info("graph %.4f,%.4f r=%d: %d nodes, %d edges in %.1fs",
+             lat, lng, radius, U.number_of_nodes(), U.number_of_edges(), time.time() - t)
+    return U
+
+
+def to_routing_graph(G: nx.MultiDiGraph) -> nx.Graph:
+    """Project an osmnx graph and collapse it to the undirected simple graph the router uses."""
     Gp = ox.project_graph(G)
     crs = Gp.graph["crs"]
 
@@ -150,8 +177,6 @@ def _build_graph(lat: float, lng: float, radius: float) -> nx.Graph:
             geom = LineString([(Gp.nodes[u]["x"], Gp.nodes[u]["y"]), (Gp.nodes[v]["x"], Gp.nodes[v]["y"])])
         U.add_edge(u, v, length=length, geom=geom, a=u, sun=0.5, grade=0.0,
                    name=d.get("name") if isinstance(d.get("name"), str) else None)
-    log.info("graph %.4f,%.4f r=%d: %d nodes, %d edges in %.1fs",
-             lat, lng, radius, U.number_of_nodes(), U.number_of_edges(), time.time() - t)
     return U
 
 
@@ -173,15 +198,23 @@ def _height(row) -> float:
 
 def _build_casters(lat: float, lng: float, radius: float, graph_future: Future) -> list[Caster]:
     t = time.time()
-    tags = {"building": True, "natural": ["tree", "tree_row", "wood"], "landuse": "forest"}
     try:
-        gdf = _overpass(ox.features_from_point, (lat, lng), tags=tags, dist=radius)
+        gdf = _overpass(ox.features_from_point, (lat, lng), tags=CASTER_TAGS, dist=radius)
     except ox._errors.InsufficientResponseError:
         return []  # genuinely nothing here (open country)
     # Any other error propagates so the future fails and get_area() retries it later,
     # instead of caching "no buildings" (which would mark every street as full sun).
 
-    G: nx.Graph = graph_future.result()
+    casters = casters_from_gdf(gdf, graph_future.result())
+    log.info("casters: %d near edges in %.1fs", len(casters), time.time() - t)
+    return casters
+
+
+CASTER_TAGS = {"building": True, "natural": ["tree", "tree_row", "wood"], "landuse": "forest"}
+
+
+def casters_from_gdf(gdf, G: nx.Graph) -> list[Caster]:
+    """Turn OSM features into projected shade casters near walkable edges."""
     gdf = ox.projection.project_gdf(gdf, to_crs=G.graph["crs"])
 
     casters: list[Caster] = []
@@ -212,23 +245,21 @@ def _build_casters(lat: float, lng: float, radius: float, graph_future: Future) 
         hits = etree.query(geoms, predicate="dwithin", distance=CASTER_NEAR_EDGE_M)
         near = set(hits[0].tolist())
         casters = [c for i, c in enumerate(casters) if i in near]
-
-    log.info("casters: %d near edges in %.1fs", len(casters), time.time() - t)
     return casters
 
 
-def _build_elevation(lat: float, lng: float, radius: float):
+def build_elevation(lat: float, lng: float, radius: float, n: int = ELEV_GRID_N):
     """Sample a coarse grid from Open-Meteo (90 m DEM) and return an interpolator."""
     t = time.time()
     dlat = radius / 111_320
     dlng = radius / (111_320 * math.cos(math.radians(lat)))
-    lats = np.linspace(lat - dlat, lat + dlat, ELEV_GRID_N)
-    lngs = np.linspace(lng - dlng, lng + dlng, ELEV_GRID_N)
+    lats = np.linspace(lat - dlat, lat + dlat, n)
+    lngs = np.linspace(lng - dlng, lng + dlng, n)
     pts = [(a, b) for a in lats for b in lngs]
 
     def fetch(chunk):
         # Sequential with backoff: the free API rate-limits bursts (HTTP 429).
-        for attempt in range(4):
+        for attempt in range(6):
             r = httpx.get(
                 "https://api.open-meteo.com/v1/elevation",
                 params={
@@ -237,15 +268,15 @@ def _build_elevation(lat: float, lng: float, radius: float):
                 },
                 timeout=15,
             )
-            if r.status_code == 429 and attempt < 3:
-                time.sleep(1.5 * (attempt + 1))
+            if r.status_code == 429 and attempt < 5:
+                time.sleep(min(60, 2 * 2 ** attempt))  # 2, 4, 8, 16, 32 s (per-minute limit)
                 continue
             r.raise_for_status()
             return r.json()["elevation"]
 
     chunks = [pts[i:i + 100] for i in range(0, len(pts), 100)]
     vals = [v for chunk in chunks for v in fetch(chunk)]
-    grid = np.array(vals, dtype=float).reshape(ELEV_GRID_N, ELEV_GRID_N)
+    grid = np.array(vals, dtype=float).reshape(n, n)
     log.info("elevation grid in %.1fs (range %.0f–%.0f m)", time.time() - t, grid.min(), grid.max())
     return RegularGridInterpolator((lats, lngs), grid, bounds_error=False, fill_value=None)
 
@@ -291,15 +322,80 @@ def _retry_failed(area: Area) -> None:
         area.casters = _pool.submit(_build_casters, area.lat, area.lng, area.radius, area.graph)
         retried = True
     if _failed(area.elevation):
-        area.elevation = _pool.submit(_build_elevation, area.lat, area.lng, area.radius)
+        area.elevation = _pool.submit(build_elevation, area.lat, area.lng, area.radius)
         retried = True
     if retried:
         log.info("retrying failed downloads for %s", area.key)
         _persist_when_ready(area)
 
 
+class OutOfCoverage(Exception):
+    pass
+
+
+def _haversine_m(lat1, lng1, lat2, lng2) -> float:
+    p1, p2 = math.radians(lat1), math.radians(lat2)
+    dp, dl = p2 - p1, math.radians(lng2 - lng1)
+    a = math.sin(dp / 2) ** 2 + math.cos(p1) * math.cos(p2) * math.sin(dl / 2) ** 2
+    return 2 * 6_371_000 * math.asin(math.sqrt(a))
+
+
+def preset_path(name: str) -> str:
+    return os.path.join(DATA_DIR, f"{name}.pkl.gz")
+
+
+def preset_for(lat: float, lng: float) -> dict | None:
+    """The built preset area containing this start point, if any."""
+    for p in PRESETS:
+        inside = _haversine_m(lat, lng, p["lat"], p["lng"]) <= p["radius"] - PRESET_EDGE_MARGIN_M
+        if inside and os.path.exists(preset_path(p["name"])):
+            return p
+    return None
+
+
+def coverage() -> list[dict]:
+    return [
+        {**p, "radius": p["radius"] - PRESET_EDGE_MARGIN_M}
+        for p in PRESETS if os.path.exists(preset_path(p["name"]))
+    ]
+
+
+def save_preset(name: str, payload: dict) -> str:
+    os.makedirs(DATA_DIR, exist_ok=True)
+    path = preset_path(name)
+    with gzip.open(path + ".tmp", "wb", compresslevel=6) as fh:
+        pickle.dump(payload, fh, protocol=pickle.HIGHEST_PROTOCOL)
+    os.replace(path + ".tmp", path)
+    return path
+
+
+def _load_preset(p: dict) -> Area:
+    key = ("preset", p["name"], 0)
+    area = _areas.get(key)
+    if area is None:
+        t = time.time()
+        with gzip.open(preset_path(p["name"]), "rb") as fh:
+            d = pickle.load(fh)
+        area = Area(key, p["lat"], p["lng"], p["radius"], _done(d["graph"]),
+                    _done(d["casters"]), _done(d["elevation"]))
+        _areas[key] = area
+        log.info("loaded preset %s in %.1fs", p["name"], time.time() - t)
+    return area
+
+
 def get_area(lat: float, lng: float, radius: float) -> Area:
-    """Return an Area covering (lat, lng, radius), starting downloads if needed."""
+    """Return an Area covering (lat, lng, radius).
+
+    Preset areas are used whenever the start is inside one. Otherwise, live
+    downloads start only if NOVA_ALLOW_LIVE=1.
+    """
+    with _lock:
+        p = preset_for(lat, lng)
+        if p is not None:
+            return _load_preset(p)
+    if not ALLOW_LIVE:
+        names = ", ".join(c["label"] for c in coverage()) or "no areas yet"
+        raise OutOfCoverage(f"Nova currently covers {names}. Drop a pin inside that area.")
     rlat, rlng = round(lat, 3), round(lng, 3)
     need = _bucket(radius)
     with _lock:
@@ -337,7 +433,7 @@ def get_area(lat: float, lng: float, radius: float) -> Area:
         # Build centred on the rounded point so the cache key matches its contents.
         g = _pool.submit(_build_graph, rlat, rlng, need)
         c = _pool.submit(_build_casters, rlat, rlng, need, g)
-        e = _pool.submit(_build_elevation, rlat, rlng, need)
+        e = _pool.submit(build_elevation, rlat, rlng, need)
         area = Area(key, rlat, rlng, need, g, c, e)
         _areas[key] = area
         _persist_when_ready(area)

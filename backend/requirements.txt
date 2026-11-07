@@ -7,3 +7,4 @@ pyproj>=3.6
 scipy>=1.11
 numpy>=1.26
 networkx>=3.2
+osmium>=4.0  # build_preset.py only

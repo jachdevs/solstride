@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import os
+import threading
 import time
 from concurrent.futures import TimeoutError as FutureTimeout
 from typing import Literal
@@ -27,12 +28,39 @@ ROUTING_RESERVE_S = 2.5  # time kept back for routing + serialising
 M_TO_FT = 3.28084
 
 app = FastAPI(title="Nova")
+
+
+def _keep_presets_warm():
+    """Load preset areas at startup and refresh their shadows as the sun moves,
+    so no user request pays the multi-second load/shade cost."""
+    while True:
+        for p in areas.coverage():
+            try:
+                a = areas.get_area(p["lat"], p["lng"], 0)
+                areas.apply_elevation(a)
+                areas.compute_sun_fraction(a)
+            except Exception:
+                log.exception("preset warm-up failed for %s", p["name"])
+        time.sleep(300)
+
+
+@app.on_event("startup")
+def _startup():
+    threading.Thread(target=_keep_presets_warm, daemon=True).start()
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
+
+
+@app.get("/coverage")
+def coverage():
+    """Prebuilt areas where routes are instant: [{name, label, lat, lng, radius}]."""
+    return {"areas": areas.coverage(), "live": areas.ALLOW_LIVE}
 
 
 @app.get("/environment")
 def environment(lat: float = Query(ge=-90, le=90), lng: float = Query(ge=-180, le=180)):
-    return get_environment(lat, lng)
+    env = get_environment(lat, lng)
+    env["covered"] = areas.ALLOW_LIVE or areas.preset_for(lat, lng) is not None
+    return env
 
 
 @app.post("/describe")
@@ -54,7 +82,10 @@ def route(
     t0 = time.time()
     deadline = t0 + ROUTE_TIMEOUT_S
     radius = areas.radius_for_distance(distance_mi * M_PER_MI)
-    area = areas.get_area(lat, lng, radius)
+    try:
+        area = areas.get_area(lat, lng, radius)
+    except areas.OutOfCoverage as e:
+        return JSONResponse(status_code=422, content={"status": "out_of_coverage", "message": str(e)})
 
     def remaining():
         return max(0.05, deadline - ROUTING_RESERVE_S - time.time())

@@ -5,9 +5,10 @@ const API_BASE = params.get("api") || "";
 const SUN = "#f5a524";
 const SHADE = "#4c5fd5";
 const NEUTRAL = "#64748b";
-const DEFAULT_CENTER = [37.7793, -122.4193];
+const DEFAULT_CENTER = [40.4433, -79.9436]; // CMU / Oakland, Pittsburgh
 
 const state = {
+  coverage: [],
   start: null,
   env: null,
   distance: 3,
@@ -33,6 +34,20 @@ let startMarker = null;
 let routeLayer = L.layerGroup().addTo(map);
 
 const startIcon = L.divIcon({ className: "", html: '<div class="start-pin"></div>', iconSize: [18, 18] });
+
+// Draw the prebuilt coverage areas so people know where to drop a pin.
+async function loadCoverage() {
+  try {
+    const r = await fetch(`${API_BASE}/coverage`);
+    const { areas } = await r.json();
+    state.coverage = areas;
+    areas.forEach((a) =>
+      L.circle([a.lat, a.lng], {
+        radius: a.radius, color: SUN, weight: 1.5, dashArray: "6 6", fill: false, interactive: false,
+      }).addTo(map)
+    );
+  } catch {}
+}
 
 map.on("click", (e) => {
   setStart(e.latlng.lat, e.latlng.lng, "pin");
@@ -97,6 +112,12 @@ async function loadEnvironment() {
     if (!r.ok) throw new Error(r.status);
     state.env = await r.json();
     renderEnvironment();
+    if (state.env.covered === false) {
+      const where = state.coverage.map((a) => a.label).join(", ") || "a supported area";
+      banner(`Nova covers ${where}. Tap inside the dashed circle to start there.`);
+      $("go").disabled = true;
+      if (state.coverage[0]) map.setView([state.coverage[0].lat, state.coverage[0].lng], 13);
+    }
     if (!state.sunOverridden) setSun(state.env.suggested_sun, false);
     $("sunHint").textContent = state.sunOverridden ? "" : `· ${state.env.suggestion_reason}`;
   } catch (e) {
@@ -347,4 +368,4 @@ async function describe(data) {
   }
 }
 
-locate();
+loadCoverage().then(locate);
