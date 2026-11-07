@@ -314,12 +314,44 @@ function renderRoute(data) {
     }).addTo(routeLayer);
   }
 
-  // Render street view photo markers & carousel
+  // Street photos: already scored when a vibe was given, otherwise fetched after render.
+  if (data.vibe) renderVibe(data.vibe);
+  else if (data.photo_points && data.photo_points.length) loadPhotos(data);
+  else $("streetviewSection").classList.add("hidden");
+
+  const bounds = L.latLngBounds(all);
+  const wide = innerWidth > 720;
+  map.fitBounds(bounds, {
+    paddingTopLeft: [wide ? 400 : 20, 20],
+    paddingBottomRight: [20, wide ? 20 : innerHeight * 0.6],
+  });
+
+  const s = data.stats;
+  const stat = (v, label) => `<div class="stat"><b>${v}</b><span>${label}</span></div>`;
+  $("stats").innerHTML =
+    stat(`${s.distance_mi} mi`, "distance") +
+    stat(s.shade_pct != null ? `${s.shade_pct}%` : "—", "in shade") +
+    stat(s.gain_ft != null ? `${s.gain_ft} ft` : "—", "climb") +
+    stat(`${s.run_min} min`, `run · ${s.walk_min} min walk`);
+
+  drawProfile(data.profile);
+
+  const notes = [];
+  if (data.degraded.includes("shade")) notes.push("Building shadows were still loading, so this loop ignores shade. Try again in a moment.");
+  if (data.degraded.includes("elevation")) notes.push("Elevation data was unavailable, so hills weren't considered.");
+  if (state.env) notes.push(...state.env.notes);
+  $("notes").innerHTML = notes.map((n) => `<li>${n}</li>`).join("");
+
+  $("result").classList.remove("hidden");
+  $("result").scrollIntoView({ behavior: "smooth", block: "nearest" });
+}
+
+function renderVibe(v) {
   const photoMarkers = [];
   const svSection = $("streetviewSection");
-  if (data.vibe && data.vibe.photos && data.vibe.photos.length) {
+  photoLayer.clearLayers();
+  if (v && v.photos && v.photos.length) {
     svSection.classList.remove("hidden");
-    const v = data.vibe;
     const badgeText = v.description
       ? `<span>Alignment with "<b>${v.description.slice(0, 32)}</b>":</span> <b>${v.avg_match_pct}% match</b>`
       : `<span>Scenery alignment:</span> <b>${v.avg_match_pct}% match</b>`;
@@ -369,32 +401,26 @@ function renderRoute(data) {
     svSection.classList.add("hidden");
   }
 
-  const bounds = L.latLngBounds(all);
-  const wide = innerWidth > 720;
-  map.fitBounds(bounds, {
-    paddingTopLeft: [wide ? 400 : 20, 20],
-    paddingBottomRight: [20, wide ? 20 : innerHeight * 0.6],
-  });
+}
 
-  const s = data.stats;
-  const stat = (v, label) => `<div class="stat"><b>${v}</b><span>${label}</span></div>`;
-  $("stats").innerHTML =
-    stat(`${s.distance_mi} mi`, "distance") +
-    stat(s.shade_pct != null ? `${s.shade_pct}%` : "—", "in shade") +
-    stat(s.gain_ft != null ? `${s.gain_ft} ft` : "—", "climb") +
-    stat(`${s.run_min} min`, `run · ${s.walk_min} min walk`);
-
-  drawProfile(data.profile);
-
-  const notes = [];
-  if (data.degraded.includes("shade")) notes.push("Building shadows were still loading, so this loop ignores shade. Try again in a moment.");
-  if (data.degraded.includes("elevation")) notes.push("Elevation data was unavailable, so hills weren't considered.");
-  if (state.env) notes.push(...state.env.notes);
-  $("notes").innerHTML = notes.map((n) => `<li>${n}</li>`).join("");
-
-  $("result").classList.remove("hidden");
-  $("result").scrollIntoView({ behavior: "smooth", block: "nearest" });
-  describe(data);
+// Fetch real street photos for the route without blocking it; hidden if none exist.
+async function loadPhotos(data) {
+  const sec = $("streetviewSection");
+  sec.classList.remove("hidden");
+  $("vibeScoreBadge").textContent = "Loading street photos…";
+  $("photosCarousel").innerHTML = "";
+  try {
+    const r = await fetch(`${API_BASE}/photos`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ points: data.photo_points, description: "" }),
+    });
+    const { vibe } = await r.json();
+    if (state.route !== data) return; // a newer route replaced this one
+    renderVibe(vibe);
+  } catch {
+    if (state.route === data) sec.classList.add("hidden");
+  }
 }
 
 function drawProfile(profile) {
@@ -424,40 +450,6 @@ function drawProfile(profile) {
     body += `<rect x="${x0.toFixed(2)}" y="${H - strip}" width="${Math.max(x1 - x0, 0.5).toFixed(2)}" height="${strip}" fill="${sunColor(profile[i].sun)}"/>`;
   }
   svg.innerHTML = body;
-}
-
-async function describe(data) {
-  const el = $("blurb");
-  el.textContent = "Writing a quick summary…";
-  el.classList.add("pending");
-  try {
-    const e = state.env || {};
-    const r = await fetch(`${API_BASE}/describe`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        stats: data.stats,
-        streets: data.streets,
-        sun_mode: state.sun,
-        elevation_pref: state.elevation < 0.35 ? "flat" : state.elevation > 0.65 ? "hilly" : "mixed",
-        environment: {
-          temperature_f: e.temperature_f, feels_like_f: e.feels_like_f, uv_index: e.uv_index,
-          cloud_cover: e.cloud_cover, condition: e.condition, sun_altitude: data.sun.altitude,
-          minutes_to_sunset: e.minutes_to_sunset,
-        },
-      }),
-    });
-    const { text } = await r.json();
-    if (state.route !== data) return; // a newer route replaced this one
-    if (text) {
-      el.textContent = text;
-      el.classList.remove("pending");
-    } else {
-      el.textContent = "";
-    }
-  } catch {
-    el.textContent = "";
-  }
 }
 
 loadCoverage().then(locate);

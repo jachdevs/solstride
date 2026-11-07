@@ -9,7 +9,7 @@ Open the app → it finds your location → shows current conditions (temperatur
 ```bash
 python3 -m venv .venv
 .venv/bin/pip install -r backend/requirements.txt
-cp .env.example .env            # add your OPENROUTER_API_KEY (optional, enables route summaries)
+cp .env.example .env            # add MAPILLARY_CLIENT_TOKEN (optional, enables street photos)
 cd backend
 ../.venv/bin/uvicorn main:app --port 8765
 ```
@@ -41,7 +41,6 @@ Live, on-demand areas anywhere (downloaded from Overpass, slow and flaky): set `
 | `GET /coverage` | Prebuilt areas `{areas:[{name,label,lat,lng,radius}]}` |
 | `GET /environment?lat&lng` | Weather (Open-Meteo), UV, cloud cover, sun altitude/azimuth, sunset, `suggested_sun` + reason, notes (e.g. "Cloudy now, so sun mode has little effect.") |
 | `GET /route?lat&lng&distance_mi&sun=min\|max&elevation=0..1[&seed]` | Loop as colored `segments`, `stats`, `profile`, `streets`, `degraded`. Outside coverage: **422 `out_of_coverage`**. Live mode only: **202 `{status:"warming"}`** while a new area downloads; the client retries. |
-| `POST /describe` | 2-sentence route summary from Claude Fable 5.1 via OpenRouter. Called after the map renders, so it never slows `/route`. |
 
 ## How it works (backend/)
 
@@ -49,8 +48,8 @@ Live, on-demand areas anywhere (downloaded from Overpass, slow and flaky): set `
 - **`area.py`**: Presets first. For each live area (rounded lat/lng + radius bucket) three downloads run in parallel: the walk graph (`osmnx.graph_from_point`), shade casters (buildings with `height`/`building:levels`, trees, tree rows and woods), and a 14×14 elevation grid from Open-Meteo, interpolated onto nodes. Shadows are computed live for the current sun position, only for casters within 40 m of a walkable edge. Each shadow is the convex hull of the footprint and the footprint shifted by `height / tan(sun altitude)` away from the sun. Each edge gets a sun fraction. Results are cached per 10 minutes of sun movement. Overpass queries are tiled and fall back across mirrors.
 - **`router.py`**: Builds triangle loops (start → A → B → start) at 8 bearings. Edge cost = length × sun preference × grade preference × reuse penalty, which avoids out-and-backs. The triangle is rescaled until the length is within 8% of the target, and candidates are scored on length error, sun, hills and overlap.
 - **`main.py`**: 10 s budget (`NOVA_ROUTE_TIMEOUT`). If shade or elevation aren't ready in time, it returns a route without them, flags it in `degraded`, and keeps downloading in the background for the next request.
-- **`sun.py`**: NOAA solar position. **`environment.py`**: weather and sun-mode suggestion. **`describe.py`**: OpenRouter call.
+- **`sun.py`**: NOAA solar position. **`environment.py`**: weather and sun-mode suggestion.
 
 ## Frontend (frontend/)
 
-Plain HTML/JS with Leaflet and no build step. Geolocation with a drop-a-pin fallback, an environment card with a sun compass, distance chips, a pre-filled sun toggle, a terrain slider, a "Tracing shadows…" loading state, a route colored shade (blue) → sun (amber), stats, an elevation profile with a sun/shade ribbon, and the AI summary.
+Plain HTML/JS with Leaflet and no build step. Geolocation with a drop-a-pin fallback, an environment card with a sun compass, distance chips, a pre-filled sun toggle, a terrain slider, a "Tracing shadows…" loading state, a route colored shade (blue) → sun (amber), stats, an elevation profile with a sun/shade ribbon and street photos.

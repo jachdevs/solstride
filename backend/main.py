@@ -16,14 +16,13 @@ from fastapi.staticfiles import StaticFiles
 from pyproj import Transformer
 
 import area as areas
-from describe import describe_route
 from environment import get_environment
 from router import M_PER_MI, generate_loop
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(message)s")
 log = logging.getLogger("nova")
 
-ROUTE_TIMEOUT_S = float(os.environ.get("NOVA_ROUTE_TIMEOUT", "18"))
+ROUTE_TIMEOUT_S = float(os.environ.get("NOVA_ROUTE_TIMEOUT", "10"))
 ROUTING_RESERVE_S = 2.5  # time kept back for routing + serialising
 M_TO_FT = 3.28084
 
@@ -47,6 +46,10 @@ def _keep_presets_warm():
 @app.on_event("startup")
 def _startup():
     threading.Thread(target=_keep_presets_warm, daemon=True).start()
+    import street_view
+    if street_view.enabled():
+        from clip_scorer import warm_up
+        threading.Thread(target=warm_up, daemon=True).start()
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
 
 
@@ -63,11 +66,21 @@ def environment(lat: float = Query(ge=-90, le=90), lng: float = Query(ge=-180, l
     return env
 
 
-@app.post("/describe")
-def describe(payload: dict = Body(...)):
-    """payload: {stats, streets, sun_mode, environment} -> {text}. Uses Claude Fable 5.1 via OpenRouter."""
-    allowed = {k: payload.get(k) for k in ("stats", "streets", "sun_mode", "elevation_pref", "environment")}
-    return {"text": describe_route(allowed)}
+@app.post("/photos")
+def photos(payload: dict = Body(...)):
+    """{points: [{sample_idx,u,v,lat,lng,heading,street_name}], description?} -> {vibe}.
+
+    Real street photos (no placeholders) scored with CLIP. Called by the frontend after
+    the route renders so photos never slow /route down.
+    """
+    import street_view
+    if not street_view.enabled():
+        return {"vibe": None}
+    from vibe import photos_for_points
+    pts = payload.get("points") or []
+    keep = ("sample_idx", "u", "v", "lat", "lng", "heading", "street_name")
+    pts = [{k: p.get(k) for k in keep} for p in pts[:10] if "lat" in p and "lng" in p]
+    return {"vibe": photos_for_points(pts, str(payload.get("description") or ""))}
 
 
 @app.get("/route")
@@ -137,6 +150,13 @@ def route(
         return JSONResponse(status_code=422, content={"status": "error", "message": str(e)})
 
     return _serialise(G, path, summ, frac, to_ll, alt, az, elev_ok, degraded, tried, t0, lat, lng, vibe=vibe)
+
+
+def _photo_points(G, path, to_ll):
+    import street_view
+    if not street_view.enabled():
+        return None
+    return street_view.sample_path_points(G, path, to_ll, n_samples=5)
 
 
 def _serialise(G, path, summ, frac, to_ll, alt, az, elev_ok, degraded, tried, t0, lat, lng, vibe=None):
@@ -210,6 +230,8 @@ def _serialise(G, path, summ, frac, to_ll, alt, az, elev_ok, degraded, tried, t0
         ],
         "sun": {"altitude": round(alt, 1), "azimuth": round(az, 1)},
         "vibe": vibe,
+        # Without a vibe description, photos are fetched afterwards via POST /photos.
+        "photo_points": _photo_points(G, path, to_ll) if vibe is None else None,
         "degraded": degraded,
         "candidates": tried,
         "elapsed_ms": round((time.time() - t0) * 1000),

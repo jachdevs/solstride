@@ -1,7 +1,11 @@
-"""Street View client supporting Mapillary API v4 (and Google Maps as secondary).
+"""Street-level photos along a route: Mapillary API v4 first, Google Street View second.
 
-Queries geolocated street-level photos around coordinates using Mapillary's graph API,
-extracts thumbnails for CLIP scoring, and provides clean fallbacks.
+Fast path design:
+  * One shared HTTP client (connection reuse) and parallel lookups.
+  * Small 256 px thumbnails are downloaded for CLIP (it works at 224 px anyway);
+    the UI gets Mapillary's 1024 px URL to load directly, so no base64 in the JSON.
+  * Lookups are cached by location (~10 m), so repeat routes in an area are instant.
+  * No synthetic placeholders: a point with no real photo is simply dropped.
 """
 
 from __future__ import annotations
@@ -11,11 +15,15 @@ import io
 import logging
 import math
 import os
+import threading
+from concurrent.futures import ThreadPoolExecutor
 from typing import Sequence
+
 import httpx
-from PIL import Image, ImageDraw
+from PIL import Image
 
 log = logging.getLogger("nova.streetview")
+
 
 def _load_env() -> None:
     path = os.path.join(os.path.dirname(__file__), "..", ".env")
@@ -29,184 +37,138 @@ def _load_env() -> None:
 
 _load_env()
 
-MAPILLARY_CLIENT_TOKEN = os.environ.get("MAPILLARY_CLIENT_TOKEN") or os.environ.get("MAPILLARY_ACCESS_TOKEN")
 MAPILLARY_API_URL = "https://graph.mapillary.com/images"
-
-GOOGLE_MAPS_KEY = os.environ.get("GOOGLE_MAPS_API_KEY") or os.environ.get("GOOGLE_API_KEY")
 GOOGLE_STREET_VIEW_URL = "https://maps.googleapis.com/maps/api/streetview"
+SEARCH_DELTA_DEG = 0.0012  # ~130 m box around the sample point
+
+_client = httpx.Client(timeout=httpx.Timeout(5.0, connect=3.0),
+                       limits=httpx.Limits(max_connections=32, max_keepalive_connections=32))
+_pool = ThreadPoolExecutor(max_workers=16)
+_cache: dict[tuple, dict | None] = {}
+_cache_lock = threading.Lock()
+
+
+def _mapillary_token() -> str | None:
+    t = os.environ.get("MAPILLARY_CLIENT_TOKEN") or os.environ.get("MAPILLARY_ACCESS_TOKEN")
+    return t.strip() if t and t.strip() else None
+
+
+def _google_key() -> str | None:
+    k = os.environ.get("GOOGLE_MAPS_API_KEY") or os.environ.get("GOOGLE_API_KEY")
+    return k.strip() if k and k.strip() else None
+
+
+def enabled() -> bool:
+    return bool(_mapillary_token() or _google_key())
 
 
 def sample_path_points(G, path: Sequence, to_ll, n_samples: int = 5) -> list[dict]:
-    """Sample n_samples evenly distributed points along a node path.
+    """Evenly spaced points along a node path (10%, 30%, ... for n=5).
 
-    Returns a list of dicts with:
-      - sample_idx: 0 to n_samples-1
-      - u, v: edge node IDs
-      - lat, lng: coordinates of the sample point
-      - heading: bearing along the road segment (degrees 0-360)
-      - street_name: name of the road
+    Each point: sample_idx, u, v (edge), lat, lng, heading (deg), street_name.
     """
     if len(path) < 2:
         return []
 
-    # Calculate cumulative distance along edges
     edges = []
     total_len = 0.0
     for u, v in zip(path[:-1], path[1:]):
-        edge_data = G[u][v]
-        length = float(edge_data.get("length", 1.0))
+        d = G[u][v]
+        length = float(d.get("length", 1.0))
         edges.append({
-            "u": u,
-            "v": v,
-            "length": length,
-            "cum_start": total_len,
-            "cum_end": total_len + length,
-            "geom": edge_data.get("geom"),
-            "name": edge_data.get("name") if isinstance(edge_data.get("name"), str) else "Unnamed road",
+            "u": u, "v": v, "length": length,
+            "cum_start": total_len, "cum_end": total_len + length,
+            "name": d.get("name") if isinstance(d.get("name"), str) else "Unnamed road",
         })
         total_len += length
-
     if total_len <= 0:
         return []
 
     samples = []
-    # Scattered fractions: e.g. for n=5 -> 10%, 30%, 50%, 70%, 90%
-    fractions = [(i + 0.5) / n_samples for i in range(n_samples)]
-
-    for idx, frac in enumerate(fractions):
-        target_dist = frac * total_len
-        # Find matching edge
-        matched = edges[-1]
-        for e in edges:
-            if e["cum_start"] <= target_dist <= e["cum_end"]:
-                matched = e
-                break
-
-        u, v = matched["u"], matched["v"]
-        u_node = G.nodes[u]
-        v_node = G.nodes[v]
-
-        edge_len = max(matched["length"], 1.0)
-        t = max(0.0, min(1.0, (target_dist - matched["cum_start"]) / edge_len))
-
-        # Linear interpolation in projected coordinates
-        px = u_node["x"] + t * (v_node["x"] - u_node["x"])
-        py = u_node["y"] + t * (v_node["y"] - u_node["y"])
-
-        # Bearing from u to v
-        dx = v_node["x"] - u_node["x"]
-        dy = v_node["y"] - u_node["y"]
-        bearing = (math.degrees(math.atan2(dx, dy)) + 360) % 360
-
+    for idx in range(n_samples):
+        target = (idx + 0.5) / n_samples * total_len
+        e = next((e for e in edges if e["cum_start"] <= target <= e["cum_end"]), edges[-1])
+        un, vn = G.nodes[e["u"]], G.nodes[e["v"]]
+        t = max(0.0, min(1.0, (target - e["cum_start"]) / max(e["length"], 1.0)))
+        px = un["x"] + t * (vn["x"] - un["x"])
+        py = un["y"] + t * (vn["y"] - un["y"])
+        heading = (math.degrees(math.atan2(vn["x"] - un["x"], vn["y"] - un["y"])) + 360) % 360
         lon, lat = to_ll.transform(px, py)
         samples.append({
-            "sample_idx": idx,
-            "u": u,
-            "v": v,
-            "lat": round(float(lat), 6),
-            "lng": round(float(lon), 6),
-            "heading": round(float(bearing), 1),
-            "street_name": matched["name"],
+            "sample_idx": idx, "u": e["u"], "v": e["v"],
+            "lat": round(float(lat), 6), "lng": round(float(lon), 6),
+            "heading": round(float(heading), 1), "street_name": e["name"],
         })
-
     return samples
 
 
-def fetch_mapillary_image(lat: float, lng: float, token: str) -> tuple[Image.Image, str] | None:
-    """Fetch closest street image from Mapillary within a small bounding box."""
-    # Search up to ~150m around target lat/lng
-    for delta in (0.0008, 0.0016):
-        bbox = f"{lng - delta:.6f},{lat - delta:.6f},{lng + delta:.6f},{lat + delta:.6f}"
-        headers = {"Authorization": f"OAuth {token.strip()}"}
-        params = {
-            "bbox": bbox,
-            "fields": "id,thumb_1024_url,thumb_2048_url,compass_angle",
-            "limit": 2,
-        }
-        try:
-            r = httpx.get(MAPILLARY_API_URL, headers=headers, params=params, timeout=5.0)
-            if r.status_code == 200:
-                data = r.json().get("data", [])
-                for item in data:
-                    img_url = item.get("thumb_1024_url") or item.get("thumb_2048_url")
-                    if img_url:
-                        img_resp = httpx.get(img_url, timeout=6.0)
-                        if img_resp.status_code == 200:
-                            img = Image.open(io.BytesIO(img_resp.content)).convert("RGB")
-                            b64 = "data:image/jpeg;base64," + base64.b64encode(img_resp.content).decode("ascii")
-                            return img, b64
-        except Exception as e:
-            log.warning("Mapillary fetch error at (%f, %f): %s", lat, lng, e)
-    return None
+def _fetch_mapillary(lat: float, lng: float, token: str) -> dict | None:
+    d = SEARCH_DELTA_DEG
+    params = {
+        "bbox": f"{lng - d:.6f},{lat - d:.6f},{lng + d:.6f},{lat + d:.6f}",
+        "fields": "id,thumb_256_url,thumb_1024_url,computed_geometry,geometry",
+        "limit": 10,
+    }
+    r = _client.get(MAPILLARY_API_URL, headers={"Authorization": f"OAuth {token}"}, params=params)
+    if r.status_code != 200:
+        log.warning("Mapillary %s at (%.5f, %.5f)", r.status_code, lat, lng)
+        return None
+    items = [i for i in r.json().get("data", []) if i.get("thumb_256_url")]
+    if not items:
+        return None
+
+    def dist2(i):
+        g = (i.get("computed_geometry") or i.get("geometry") or {}).get("coordinates")
+        return (g[0] - lng) ** 2 + (g[1] - lat) ** 2 if g else 1.0
+
+    best = min(items, key=dist2)
+    img = _client.get(best["thumb_256_url"])
+    if img.status_code != 200:
+        return None
+    return {
+        "photo_id": f"mly:{best['id']}",
+        "image_url": best.get("thumb_1024_url") or best["thumb_256_url"],
+        "pil": Image.open(io.BytesIO(img.content)).convert("RGB"),
+        "source": "mapillary",
+    }
 
 
-def fetch_google_image(lat: float, lng: float, heading: float, key: str) -> tuple[Image.Image, str] | None:
-    """Fetch Google Street View photo."""
+def _fetch_google(lat: float, lng: float, heading: float, key: str) -> dict | None:
+    params = {"size": "400x300", "location": f"{lat:.6f},{lng:.6f}", "heading": f"{heading:.1f}",
+              "fov": "90", "pitch": "0", "source": "outdoor", "key": key}
+    r = _client.get(GOOGLE_STREET_VIEW_URL, params=params)
+    if r.status_code != 200 or not r.headers.get("content-type", "").startswith("image/"):
+        return None
+    # The URL contains the API key, so inline the bytes instead of exposing it.
+    return {
+        "photo_id": f"gsv:{lat:.5f},{lng:.5f},{heading:.0f}",
+        "image_url": "data:image/jpeg;base64," + base64.b64encode(r.content).decode("ascii"),
+        "pil": Image.open(io.BytesIO(r.content)).convert("RGB"),
+        "source": "google",
+    }
+
+
+def find_photo(lat: float, lng: float, heading: float = 0.0) -> dict | None:
+    """Closest real street photo near a point, or None. Cached by ~10 m cell."""
+    key = (round(lat, 4), round(lng, 4))
+    with _cache_lock:
+        if key in _cache:
+            return _cache[key]
+    res = None
     try:
-        params = {
-            "size": "400x300",
-            "location": f"{lat:.6f},{lng:.6f}",
-            "heading": f"{heading:.1f}",
-            "fov": "90",
-            "pitch": "0",
-            "source": "outdoor",
-            "key": key.strip(),
-        }
-        resp = httpx.get(GOOGLE_STREET_VIEW_URL, params=params, timeout=8.0)
-        if resp.status_code == 200 and resp.headers.get("content-type", "").startswith("image/"):
-            img = Image.open(io.BytesIO(resp.content)).convert("RGB")
-            b64 = "data:image/jpeg;base64," + base64.b64encode(resp.content).decode("ascii")
-            return img, b64
+        tok = _mapillary_token()
+        if tok:
+            res = _fetch_mapillary(lat, lng, tok)
+        if res is None and _google_key():
+            res = _fetch_google(lat, lng, heading, _google_key())
     except Exception as e:
-        log.warning("Google Street View fetch error: %s", e)
-    return None
+        log.warning("street photo lookup failed at (%.5f, %.5f): %s", lat, lng, e)
+        return None  # don't cache transient errors
+    with _cache_lock:
+        _cache[key] = res
+    return res
 
 
-def _make_fallback_image(lat: float, lng: float, street_name: str, sample_idx: int) -> Image.Image:
-    """Generate a clean synthetic street placeholder if API is offline or not configured."""
-    img = Image.new("RGB", (400, 300), color=(240, 244, 248))
-    draw = ImageDraw.Draw(img)
-
-    # Stylized sky and scenery
-    draw.rectangle([0, 0, 400, 140], fill=(185, 215, 245))
-    draw.ellipse([-50, 100, 200, 200], fill=(95, 145, 90))
-    draw.ellipse([150, 90, 450, 210], fill=(85, 135, 80))
-    # Road / walkway
-    draw.polygon([(160, 140), (240, 140), (380, 300), (20, 300)], fill=(120, 125, 130))
-    draw.line([(200, 140), (200, 300)], fill=(255, 255, 255), width=2)
-    # Tree crowns
-    draw.ellipse([20, 70, 90, 150], fill=(60, 120, 65))
-    draw.ellipse([310, 65, 380, 145], fill=(60, 120, 65))
-
-    # Badge overlay
-    draw.rectangle([10, 10, 390, 50], fill=(20, 25, 35, 210))
-    draw.text((20, 15), f"Point #{sample_idx + 1}: {street_name[:30]}", fill=(255, 255, 255))
-    draw.text((20, 32), f"Lat {lat:.4f}, Lng {lng:.4f} (Mapillary Stand-in)", fill=(200, 220, 240))
-
-    return img
-
-
-def fetch_street_view(lat: float, lng: float, heading: float = 0, street_name: str = "", sample_idx: int = 0) -> tuple[Image.Image, str, bool]:
-    """Fetch street photo for a lat/lng using Mapillary first, then Google, then fallback.
-
-    Returns:
-      (PIL.Image, base64_data_url, is_real)
-    """
-    mapillary_token = os.environ.get("MAPILLARY_CLIENT_TOKEN") or os.environ.get("MAPILLARY_ACCESS_TOKEN")
-    if mapillary_token and mapillary_token.strip():
-        res = fetch_mapillary_image(lat, lng, mapillary_token)
-        if res is not None:
-            return res[0], res[1], True
-
-    google_key = os.environ.get("GOOGLE_MAPS_API_KEY") or os.environ.get("GOOGLE_API_KEY")
-    if google_key and google_key.strip():
-        res = fetch_google_image(lat, lng, heading, google_key)
-        if res is not None:
-            return res[0], res[1], True
-
-    # Fallback image
-    img = _make_fallback_image(lat, lng, street_name, sample_idx)
-    buf = io.BytesIO()
-    img.save(buf, format="JPEG", quality=85)
-    b64 = "data:image/jpeg;base64," + base64.b64encode(buf.getvalue()).decode("ascii")
-    return img, b64, False
+def find_photos(points: Sequence[dict]) -> list[dict | None]:
+    """Parallel find_photo for many points, preserving order."""
+    return list(_pool.map(lambda p: find_photo(p["lat"], p["lng"], p.get("heading", 0.0)), points))
