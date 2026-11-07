@@ -1,0 +1,84 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <title>Nova Loops</title>
+  <meta name="description" content="Sun- and shade-aware running loops that start where you are." />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <div id="map" aria-label="Map"></div>
+
+  <div id="banner" class="banner hidden" role="status"></div>
+
+  <aside class="panel" id="panel">
+    <header class="brand">
+      <span class="logo" aria-hidden="true">◐</span>
+      <div>
+        <h1>Nova</h1>
+        <p class="tag">Loops that follow the light, or dodge it.</p>
+      </div>
+    </header>
+
+    <section class="card env" id="env">
+      <div class="env-loading">Reading the sky…</div>
+    </section>
+
+    <section class="controls">
+      <div class="field">
+        <span class="label">Distance</span>
+        <div class="chips" id="distance">
+          <button class="chip" data-mi="1">1 mi</button>
+          <button class="chip active" data-mi="3">3 mi</button>
+          <button class="chip" data-mi="5">5 mi</button>
+          <button class="chip" data-mi="custom">Custom</button>
+        </div>
+        <div class="custom hidden" id="customWrap">
+          <input id="customMi" type="number" min="0.5" max="10" step="0.5" value="2" inputmode="decimal" />
+          <span>miles</span>
+        </div>
+      </div>
+
+      <div class="field">
+        <span class="label">Sun <span class="hint" id="sunHint"></span></span>
+        <div class="toggle" id="sun" role="radiogroup">
+          <button data-sun="min" role="radio">☂ Min sun</button>
+          <button data-sun="max" role="radio">☀ Max sun</button>
+        </div>
+      </div>
+
+      <div class="field">
+        <span class="label">Terrain</span>
+        <input type="range" id="elev" min="0" max="100" value="30" />
+        <div class="range-labels"><span>Flat</span><span>Hilly</span></div>
+      </div>
+
+      <button class="go" id="go" disabled>Generate loop</button>
+    </section>
+
+    <section class="result hidden" id="result">
+      <div class="stats" id="stats"></div>
+      <p class="blurb" id="blurb"></p>
+      <div class="profile">
+        <div class="label">Elevation &amp; sun along the loop</div>
+        <svg id="profile" viewBox="0 0 320 110" preserveAspectRatio="none"></svg>
+        <div class="legend"><span class="sw sun"></span>Sun <span class="sw shade"></span>Shade</div>
+      </div>
+      <ul class="notes" id="notes"></ul>
+      <button class="ghost" id="again">↻ Try another loop</button>
+    </section>
+  </aside>
+
+  <div class="loading hidden" id="loading" aria-live="polite">
+    <div class="orb"><div class="shadow"></div></div>
+    <div class="loading-text" id="loadingText">Tracing shadows…</div>
+  </div>
+
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
