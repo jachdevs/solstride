@@ -25,11 +25,36 @@ const $ = (id) => document.getElementById(id);
 // ---------------------------------------------------------------- map
 const map = L.map("map", { zoomControl: false }).setView(DEFAULT_CENTER, 14);
 L.control.zoom({ position: "topright" }).addTo(map);
-L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", {
-  maxZoom: 19,
-  attribution: "&copy; OpenStreetMap contributors",
-  className: "base-tiles",
-}).addTo(map);
+// Clean, Apple-Maps-like light vector basemap (OpenFreeMap "liberty", no key), always light
+// so the route reads clearly. POIs/shields are hidden and major roads drawn white so the
+// sun/shade route is the only strong colour. Falls back to OSM raster tiles without WebGL.
+const ATTR = '<a href="https://openfreemap.org">OpenFreeMap</a> &copy; <a href="https://www.openmaptiles.org/">OpenMapTiles</a> &copy; OpenStreetMap contributors';
+const HIDE = /^(poi|airport|aeroway|highway-shield|road_shield|label_other|building-3d)/;
+const MAJOR_ROAD = /(motorway|trunk|primary|secondary|tertiary)/;
+
+function rasterFallback() {
+  L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", {
+    maxZoom: 19, attribution: "&copy; OpenStreetMap contributors", className: "base-tiles",
+  }).addTo(map);
+}
+try {
+  if (!L.maplibreGL) throw new Error("maplibre unavailable");
+  const gl = L.maplibreGL({ style: "https://tiles.openfreemap.org/styles/liberty", attribution: ATTR }).addTo(map);
+  const m = gl.getMaplibreMap();
+  const tidy = () => {
+    for (const layer of m.getStyle().layers) {
+      if (HIDE.test(layer.id)) m.setLayoutProperty(layer.id, "visibility", "none");
+      else if (layer.type === "line" && MAJOR_ROAD.test(layer.id) && /^(road|bridge|tunnel|highway)/.test(layer.id)) {
+        m.setPaintProperty(layer.id, "line-color", /casing/.test(layer.id) ? "#d9d6cf" : "#ffffff");
+      }
+    }
+  };
+  if (m.isStyleLoaded()) tidy();
+  m.on("style.load", tidy);
+  m.on("error", (e) => console.warn("basemap:", e && e.error && e.error.message));
+} catch (e) {
+  rasterFallback();
+}
 
 let startMarker = null;
 let routeLayer = L.layerGroup().addTo(map);
@@ -37,17 +62,12 @@ let photoLayer = L.layerGroup().addTo(map);
 
 const startIcon = L.divIcon({ className: "", html: '<div class="start-pin"></div>', iconSize: [18, 18] });
 
-// Draw the prebuilt coverage areas so people know where to drop a pin.
+// Prebuilt coverage areas (used to explain where routes are available).
 async function loadCoverage() {
   try {
     const r = await fetch(`${API_BASE}/coverage`);
     const { areas } = await r.json();
     state.coverage = areas;
-    areas.forEach((a) =>
-      L.circle([a.lat, a.lng], {
-        radius: a.radius, color: SUN, weight: 1.5, dashArray: "6 6", fill: false, interactive: false,
-      }).addTo(map)
-    );
   } catch {}
 }
 
@@ -116,7 +136,7 @@ async function loadEnvironment() {
     renderEnvironment();
     if (state.env.covered === false) {
       const where = state.coverage.map((a) => a.label).join(", ") || "a supported area";
-      banner(`Nova covers ${where}. Tap inside the dashed circle to start there.`);
+      banner(`Nova covers ${where}. Tap the map there to start.`);
       $("go").disabled = true;
       if (state.coverage[0]) map.setView([state.coverage[0].lat, state.coverage[0].lng], 13);
     }
@@ -352,17 +372,17 @@ function renderVibe(v) {
   photoLayer.clearLayers();
   if (v && v.photos && v.photos.length) {
     svSection.classList.remove("hidden");
-    const badgeText = v.description
-      ? `<span>Alignment with "<b>${v.description.slice(0, 32)}</b>":</span> <b>${v.avg_match_pct}% match</b>`
-      : `<span>Scenery alignment:</span> <b>${v.avg_match_pct}% match</b>`;
-    $("vibeScoreBadge").innerHTML = badgeText;
+    const esc = (t) => String(t).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+    $("vibeScoreBadge").innerHTML = `
+      <span class="vibe-label">${v.description ? `Match with <b>“${esc(v.description.replace(/\.$/, ""))}”</b>` : "Scenery match"}</span>
+      <span class="vibe-pct">${Math.round(v.avg_match_pct)}%</span>`;
 
     const cardsHtml = v.photos.map((p) => `
       <div class="photo-card" data-idx="${p.sample_idx}">
         <img src="${p.image}" class="photo-thumb" alt="Street view at ${p.street_name}" />
         <div class="photo-meta">
-          <div class="photo-street">#${p.sample_idx + 1} · ${p.street_name}</div>
-          <div class="clip-pill"><b>${p.target_score_pct}% match</b><br/>${p.top_benchmark}</div>
+          <div class="photo-street">#${p.sample_idx + 1}${p.street_name && p.street_name !== "Unnamed road" ? ` · ${p.street_name}` : ""}</div>
+          <div class="clip-pill"><b>${Math.round(p.target_score_pct)}% match</b><span>${p.top_benchmark.replace(/\.$/, "")}</span></div>
         </div>
       </div>
     `).join("");
