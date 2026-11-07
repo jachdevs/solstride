@@ -96,7 +96,7 @@ The backend returns route segments, statistics, an elevation profile, prominent 
 A successful route includes `segments`, `stats`, `profile`, `streets`, `sun`, `vibe`, `degraded`, `candidates`, and `elapsed_ms`. Photo records include `is_real`, sample coordinates, a base64 image, similarity scores, and benchmark results.
 
 ## Project structure
-
+```text
 nova/
 ├── frontend/
 │   ├── index.html       # Page structure and controls
@@ -114,7 +114,7 @@ nova/
     ├── build_preset.py  # Geographic preset generation
     ├── warm_cache.py    # Live-area cache preparation
     └── data/            # Bundled geographic preset
-
+```
 ## Prototype limitations
 
 - **Scenery scores are heuristic similarity scores, not probabilities or safety ratings.** Five samples cannot establish the condition of an entire route.
