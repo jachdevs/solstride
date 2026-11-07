@@ -15,6 +15,7 @@ const state = {
   sun: "min",
   sunOverridden: false,
   elevation: 0.3,
+  prompt: "",
   seed: null,
   route: null,
 };
@@ -32,6 +33,7 @@ L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", {
 
 let startMarker = null;
 let routeLayer = L.layerGroup().addTo(map);
+let photoLayer = L.layerGroup().addTo(map);
 
 const startIcon = L.divIcon({ className: "", html: '<div class="start-pin"></div>', iconSize: [18, 18] });
 
@@ -194,6 +196,31 @@ function setSun(mode, byUser) {
 document.querySelectorAll("#sun button").forEach((b) => b.addEventListener("click", () => setSun(b.dataset.sun, true)));
 setSun("min", false);
 
+// Chatbox & prompt chips
+const routePromptEl = $("routePrompt");
+if (routePromptEl) {
+  routePromptEl.addEventListener("input", (e) => {
+    state.prompt = e.target.value;
+    document.querySelectorAll(".prompt-chip").forEach((c) => {
+      c.classList.toggle("active", c.dataset.prompt === state.prompt);
+    });
+  });
+}
+document.querySelectorAll(".prompt-chip").forEach((btn) => {
+  btn.addEventListener("click", () => {
+    const wasActive = btn.classList.contains("active");
+    document.querySelectorAll(".prompt-chip").forEach((c) => c.classList.remove("active"));
+    if (!wasActive) {
+      btn.classList.add("active");
+      state.prompt = btn.dataset.prompt;
+      if (routePromptEl) routePromptEl.value = state.prompt;
+    } else {
+      state.prompt = "";
+      if (routePromptEl) routePromptEl.value = "";
+    }
+  });
+});
+
 $("elev").addEventListener("input", (e) => (state.elevation = e.target.value / 100));
 $("go").addEventListener("click", () => generate(null));
 $("again").addEventListener("click", () => generate(Math.floor(Math.random() * 1e6)));
@@ -202,9 +229,10 @@ $("again").addEventListener("click", () => generate(Math.floor(Math.random() * 1
 const LOADING_LINES = [
   "Mapping the streets around you…",
   "Tracing shadows…",
-  "Measuring building heights…",
-  "Finding the hills…",
-  "Drawing your loop…",
+  "Sampling Street View imagery…",
+  "Comparing visual scenery with CLIP…",
+  "Measuring building heights & hills…",
+  "Selecting best matching loop…",
 ];
 let loadingTimer = null;
 function setLoading(on) {
@@ -230,6 +258,9 @@ async function generate(seed) {
     lat, lng, distance_mi: state.distance, sun: state.sun, elevation: state.elevation,
   });
   if (seed != null) q.set("seed", seed);
+  if (state.prompt && state.prompt.trim()) {
+    q.set("description", state.prompt.trim());
+  }
 
   try {
     // A brand-new area can take a while to download; the API answers 202 until it's ready.
@@ -263,12 +294,17 @@ const sunColor = (s) => (s == null ? NEUTRAL : mix(SHADE, SUN, s));
 
 function renderRoute(data) {
   routeLayer.clearLayers();
+  photoLayer.clearLayers();
   const all = [];
   data.segments.forEach((seg) => all.push(...seg.coords));
   L.polyline(all, { color: "#fff", weight: 10, opacity: 0.9, lineJoin: "round" }).addTo(routeLayer);
   data.segments.forEach((seg) =>
     L.polyline(seg.coords, { color: sunColor(seg.sun), weight: 6, opacity: 1, lineJoin: "round", lineCap: "round" })
-      .bindTooltip(seg.sun == null ? "Shade unknown" : `${Math.round(seg.sun * 100)}% sun`, { sticky: true })
+      .bindTooltip(
+        (seg.sun == null ? "Shade unknown" : `${Math.round(seg.sun * 100)}% sun`) +
+        (seg.vibe ? ` · ${seg.vibe.top_benchmark} (${seg.vibe.score_pct}%)` : ""),
+        { sticky: true }
+      )
       .addTo(routeLayer)
   );
   // The loop starts at the nearest walkable node; link it to the start pin.
@@ -277,6 +313,62 @@ function renderRoute(data) {
       color: NEUTRAL, weight: 3, dashArray: "4 6", opacity: 0.9,
     }).addTo(routeLayer);
   }
+
+  // Render street view photo markers & carousel
+  const photoMarkers = [];
+  const svSection = $("streetviewSection");
+  if (data.vibe && data.vibe.photos && data.vibe.photos.length) {
+    svSection.classList.remove("hidden");
+    const v = data.vibe;
+    const badgeText = v.description
+      ? `<span>Alignment with "<b>${v.description.slice(0, 32)}</b>":</span> <b>${v.avg_match_pct}% match</b>`
+      : `<span>Scenery alignment:</span> <b>${v.avg_match_pct}% match</b>`;
+    $("vibeScoreBadge").innerHTML = badgeText;
+
+    const cardsHtml = v.photos.map((p) => `
+      <div class="photo-card" data-idx="${p.sample_idx}">
+        <img src="${p.image}" class="photo-thumb" alt="Street view at ${p.street_name}" />
+        <div class="photo-meta">
+          <div class="photo-street">#${p.sample_idx + 1} · ${p.street_name}</div>
+          <div class="clip-pill"><b>${p.target_score_pct}% match</b><br/>${p.top_benchmark}</div>
+        </div>
+      </div>
+    `).join("");
+    $("photosCarousel").innerHTML = cardsHtml;
+
+    v.photos.forEach((p) => {
+      const icon = L.divIcon({
+        className: "",
+        html: `<div class="photo-map-marker">${p.sample_idx + 1}</div>`,
+        iconSize: [24, 24],
+        iconAnchor: [12, 12],
+      });
+      const marker = L.marker([p.lat, p.lng], { icon }).addTo(photoLayer);
+      const popup = `
+        <div class="photo-popup">
+          <img src="${p.image}" alt="${p.street_name}" />
+          <b>${Math.round(p.target_score_pct)}% match</b>
+          <p>${v.description ? `"${v.description}"` : p.top_benchmark}</p>
+        </div>
+      `;
+      marker.bindPopup(popup, { maxWidth: 220 });
+      photoMarkers[p.sample_idx] = marker;
+    });
+
+    document.querySelectorAll(".photo-card").forEach((card) => {
+      card.addEventListener("click", () => {
+        const idx = parseInt(card.dataset.idx, 10);
+        const m = photoMarkers[idx];
+        if (m) {
+          map.setView(m.getLatLng(), Math.max(map.getZoom(), 15));
+          m.openPopup();
+        }
+      });
+    });
+  } else if (svSection) {
+    svSection.classList.add("hidden");
+  }
+
   const bounds = L.latLngBounds(all);
   const wide = innerWidth > 720;
   map.fitBounds(bounds, {

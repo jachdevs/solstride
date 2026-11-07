@@ -100,8 +100,9 @@ def _summarise(G, path, frac):
 
 
 def generate_loop(G: nx.Graph, lat: float, lng: float, to_proj, distance_mi: float, sun: str,
-                  elevation: float, frac: dict | None, deadline: float, seed: int | None = None):
-    """Return (path, summary, candidates_tried). Respects `deadline` (time.time())."""
+                  elevation: float, frac: dict | None, deadline: float, seed: int | None = None,
+                  to_ll=None, description: str | None = None):
+    """Return (path, summary, candidates_tried, vibe_info). Respects `deadline` (time.time())."""
     rng = random.Random(seed)
     target = distance_mi * M_PER_MI
     sx, sy = to_proj.transform(lng, lat)
@@ -115,7 +116,7 @@ def generate_loop(G: nx.Graph, lat: float, lng: float, to_proj, distance_mi: flo
     bearings = [(base_bearing + i * 45) % 360 for i in range(8)]
     rng.shuffle(bearings)
 
-    best = None
+    candidates = []
     tried = 0
     for bearing in bearings:
         if tried and time.time() > deadline:
@@ -140,9 +141,119 @@ def generate_loop(G: nx.Graph, lat: float, lng: float, to_proj, distance_mi: flo
         gain_per_km = summ["gain_m"] / (summ["length_m"] / 1000)
         hill_term = (gain_per_km / 40) * (1 - 2 * elevation)  # ~40 m/km is properly hilly
         score = 4 * len_err + 1.0 * sun_term + 0.5 * hill_term + 2 * summ["overlap"]
-        if best is None or score < best[0]:
-            best = (score, path, summ)
+        candidates.append((score, path, summ))
 
-    if best is None:
+    if not candidates:
         raise RuntimeError("Couldn't find a loop from here. Try another start point or distance.")
-    return best[1], best[2], tried
+
+    candidates.sort(key=lambda c: c[0])
+
+    # If description is provided and to_ll is available, evaluate candidates with Street View + CLIP
+    best_vibe = None
+    if description and description.strip() and to_ll:
+        from street_view import sample_path_points, fetch_street_view
+        from clip_scorer import score_images
+
+        desc_text = description.strip()
+        evaluated_candidates = []
+
+        # Evaluate all good candidate loops
+        for base_score, c_path, c_summ in candidates:
+            pts = sample_path_points(G, c_path, to_ll, n_samples=5)
+            images = []
+            img_b64s = []
+            is_reals = []
+            for p in pts:
+                img, b64_str, is_real = fetch_street_view(
+                    p["lat"], p["lng"], p["heading"], p["street_name"], p["sample_idx"]
+                )
+                images.append(img)
+                img_b64s.append(b64_str)
+                is_reals.append(is_real)
+
+            clip_evals = score_images(images, target_prompt=desc_text)
+            
+            # Calculate average match from REAL photos only, so synthetic fallback images do not dilute visual scores
+            real_scores = [c_eval["target_score_pct"] for is_real, c_eval in zip(is_reals, clip_evals) if is_real]
+            real_avg_match = sum(real_scores) / len(real_scores) if real_scores else None
+
+            photos_data = []
+            for p, b64_str, is_real, c_eval in zip(pts, img_b64s, is_reals, clip_evals):
+                # If this image was a fallback, assign the average score of real photos on the loop
+                effective_score = c_eval["target_score_pct"] if is_real else (real_avg_match if real_avg_match is not None else c_eval["target_score_pct"])
+                photos_data.append({
+                    "sample_idx": p["sample_idx"],
+                    "u": p["u"],
+                    "v": p["v"],
+                    "lat": p["lat"],
+                    "lng": p["lng"],
+                    "heading": p["heading"],
+                    "street_name": p["street_name"],
+                    "image": b64_str,
+                    "is_real": is_real,
+                    "target_similarity": c_eval["target_similarity"],
+                    "target_score_pct": round(effective_score, 1),
+                    "benchmark_probs": c_eval["benchmark_probs"],
+                    "top_benchmark": c_eval["top_benchmark"],
+                })
+
+            final_avg_match = real_avg_match if real_avg_match is not None else (
+                sum(p["target_score_pct"] for p in photos_data) / max(len(photos_data), 1)
+            )
+
+            vibe_summary = {
+                "description": desc_text,
+                "avg_match_pct": round(final_avg_match, 1),
+                "photos": photos_data,
+            }
+            # Visual alignment weight: strongly prioritize paths whose real street photos match the desired vibe
+            clip_penalty = (100.0 - final_avg_match) / 100.0
+            total_score = base_score * 0.3 + clip_penalty * 3.5
+            evaluated_candidates.append((total_score, c_path, c_summ, vibe_summary))
+
+        evaluated_candidates.sort(key=lambda x: x[0])
+        best = evaluated_candidates[0]
+        return best[1], best[2], tried, best[3]
+
+    # If no description provided, but to_ll is given, still sample 5 photos for visualization
+    if to_ll:
+        try:
+            from street_view import sample_path_points, fetch_street_view
+            from clip_scorer import score_images
+
+            c_score, c_path, c_summ = candidates[0]
+            pts = sample_path_points(G, c_path, to_ll, n_samples=5)
+            images, img_b64s, is_reals = [], [], []
+            for p in pts:
+                img, b64_str, is_real = fetch_street_view(p["lat"], p["lng"], p["heading"], p["street_name"], p["sample_idx"])
+                images.append(img)
+                img_b64s.append(b64_str)
+                is_reals.append(is_real)
+            clip_evals = score_images(images, target_prompt="A pedestrian path or road.")
+            photos_data = []
+            for p, b64_str, is_real, c_eval in zip(pts, img_b64s, is_reals, clip_evals):
+                photos_data.append({
+                    "sample_idx": p["sample_idx"],
+                    "u": p["u"],
+                    "v": p["v"],
+                    "lat": p["lat"],
+                    "lng": p["lng"],
+                    "heading": p["heading"],
+                    "street_name": p["street_name"],
+                    "image": b64_str,
+                    "is_real": is_real,
+                    "target_similarity": c_eval["target_similarity"],
+                    "target_score_pct": c_eval["target_score_pct"],
+                    "benchmark_probs": c_eval["benchmark_probs"],
+                    "top_benchmark": c_eval["top_benchmark"],
+                })
+            best_vibe = {
+                "description": "",
+                "avg_match_pct": round(sum(p["target_score_pct"] for p in photos_data) / max(len(photos_data), 1), 1),
+                "photos": photos_data,
+            }
+        except Exception:
+            best_vibe = None
+
+    best = candidates[0]
+    return best[1], best[2], tried, best_vibe

@@ -23,7 +23,7 @@ from router import M_PER_MI, generate_loop
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(message)s")
 log = logging.getLogger("nova")
 
-ROUTE_TIMEOUT_S = float(os.environ.get("NOVA_ROUTE_TIMEOUT", "10"))
+ROUTE_TIMEOUT_S = float(os.environ.get("NOVA_ROUTE_TIMEOUT", "18"))
 ROUTING_RESERVE_S = 2.5  # time kept back for routing + serialising
 M_TO_FT = 3.28084
 
@@ -78,6 +78,7 @@ def route(
     sun: Literal["min", "max"] = "min",
     elevation: float = Query(0.5, ge=0, le=1),
     seed: int | None = None,
+    description: str | None = Query(None),
 ):
     t0 = time.time()
     deadline = t0 + ROUTE_TIMEOUT_S
@@ -127,18 +128,26 @@ def route(
     to_proj = Transformer.from_crs("EPSG:4326", crs, always_xy=True)
     to_ll = Transformer.from_crs(crs, "EPSG:4326", always_xy=True)
     try:
-        path, summ, tried = generate_loop(
+        path, summ, tried, vibe = generate_loop(
             G, lat, lng, to_proj, distance_mi, sun, elevation, frac,
             deadline=max(deadline - 0.7, time.time() + 0.5), seed=seed,
+            to_ll=to_ll, description=description,
         )
     except RuntimeError as e:
         return JSONResponse(status_code=422, content={"status": "error", "message": str(e)})
 
-    return _serialise(G, path, summ, frac, to_ll, alt, az, elev_ok, degraded, tried, t0, lat, lng)
+    return _serialise(G, path, summ, frac, to_ll, alt, az, elev_ok, degraded, tried, t0, lat, lng, vibe=vibe)
 
 
-def _serialise(G, path, summ, frac, to_ll, alt, az, elev_ok, degraded, tried, t0, lat, lng):
+def _serialise(G, path, summ, frac, to_ll, alt, az, elev_ok, degraded, tried, t0, lat, lng, vibe=None):
     from router import _edge_sun
+
+    # Map photo evaluations to edges for segment alignment
+    edge_vibe_map = {}
+    if vibe and vibe.get("photos"):
+        for photo in vibe["photos"]:
+            edge_vibe_map[(photo["u"], photo["v"])] = photo
+            edge_vibe_map[(photo["v"], photo["u"])] = photo
 
     segments = []
     profile = []
@@ -156,11 +165,20 @@ def _serialise(G, path, summ, frac, to_ll, alt, az, elev_ok, degraded, tried, t0
         lons, lats = to_ll.transform(xs, ys)
         pts = [[round(la, 6), round(lo, 6)] for la, lo in zip(lats, lons)]
         s = round(_edge_sun(frac, u, v), 2) if frac is not None else None
-        # Merge with the previous segment when the sun bucket matches.
-        if segments and s is not None and segments[-1]["sun"] is not None and abs(segments[-1]["sun"] - s) < 0.1:
+
+        v_match = edge_vibe_map.get((u, v))
+        vibe_info = {
+            "top_benchmark": v_match["top_benchmark"],
+            "score_pct": v_match["target_score_pct"],
+        } if v_match else None
+
+        # Merge with the previous segment when the sun bucket and vibe match.
+        if (segments and s is not None and segments[-1]["sun"] is not None
+                and abs(segments[-1]["sun"] - s) < 0.1 and segments[-1].get("vibe") == vibe_info):
             segments[-1]["coords"].extend(pts[1:])
         else:
-            segments.append({"coords": pts, "sun": s})
+            segments.append({"coords": pts, "sun": s, "vibe": vibe_info})
+
         if d.get("name"):
             street_len[d["name"]] = street_len.get(d["name"], 0) + d["length"]
         cum += d["length"]
@@ -191,6 +209,7 @@ def _serialise(G, path, summ, frac, to_ll, alt, az, elev_ok, degraded, tried, t0
             for n, m in sorted(street_len.items(), key=lambda kv: -kv[1])[:6]
         ],
         "sun": {"altitude": round(alt, 1), "azimuth": round(az, 1)},
+        "vibe": vibe,
         "degraded": degraded,
         "candidates": tried,
         "elapsed_ms": round((time.time() - t0) * 1000),

@@ -53,6 +53,19 @@
       </div>
 
       <div class="field">
+        <span class="label">Route Vibe &amp; Scenery</span>
+        <div class="chatbox-wrap">
+          <textarea id="routePrompt" class="chatbox" rows="2" placeholder="Describe your preferred route (e.g. tree-lined street, park path)..."></textarea>
+          <div class="prompt-chips">
+            <button type="button" class="prompt-chip" data-prompt="A tree-lined residential street.">🌳 Tree-lined</button>
+            <button type="button" class="prompt-chip" data-prompt="A pedestrian path through a park.">🌿 Park path</button>
+            <button type="button" class="prompt-chip" data-prompt="A street with a clearly visible sidewalk.">🚶 Sidewalk</button>
+            <button type="button" class="prompt-chip" data-prompt="A busy multilane road.">🏙️ Urban road</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="field">
         <span class="label">Terrain</span>
         <input type="range" id="elev" min="0" max="100" value="30" />
         <div class="range-labels"><span>Flat</span><span>Hilly</span></div>
@@ -68,6 +81,11 @@
         <div class="label">Elevation &amp; sun along the loop</div>
         <svg id="profile" viewBox="0 0 320 110" preserveAspectRatio="none"></svg>
         <div class="legend"><span class="sw sun"></span>Sun <span class="sw shade"></span>Shade</div>
+      </div>
+      <div class="streetview-section" id="streetviewSection">
+        <div class="label" id="vibeHeader">Scattered Street-View Points (CLIP Scored)</div>
+        <div class="vibe-score-badge" id="vibeScoreBadge"></div>
+        <div class="photos-carousel" id="photosCarousel"></div>
       </div>
       <ul class="notes" id="notes"></ul>
       <button class="ghost" id="again">↻ Try another loop</button>
