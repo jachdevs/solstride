@@ -15,6 +15,23 @@ SolStride is a running and walking route prototype that builds loops near your s
 - See the chosen route on a map with sun/shade colors, numbered photo markers, distance, elevation gain, estimated duration and an elevation profile.
 - Mobile version (`/mobile.html`) with run tracking: timer, distance, pace, progress and a post-run summary.
 
+## Built With
+
+[![Python][python-badge]][python-url]
+[![FastAPI][fastapi-badge]][fastapi-url]
+[![PyTorch][pytorch-badge]][pytorch-url]
+[![Hugging Face][hf-badge]][hf-url]
+[![OSMnx][osmnx-badge]][osmnx-url]
+[![NetworkX][networkx-badge]][networkx-url]
+[![Shapely][shapely-badge]][shapely-url]
+[![OpenStreetMap][osm-badge]][osm-url]
+[![Leaflet][leaflet-badge]][leaflet-url]
+[![MapLibre][maplibre-badge]][maplibre-url]
+[![JavaScript][js-badge]][js-url]
+[![Expo][expo-badge]][expo-url]
+[![React Native][rn-badge]][rn-url]
+[![Mapillary][mapillary-badge]][mapillary-url]
+
 ## Run locally
 
 Python 3.11 is a reasonable starting environment. Dependencies are in `backend/requirements.txt`.
@@ -154,7 +171,34 @@ Expo Go needs the same Expo account signed in on the phone and in the CLI. The p
 - **Durations use fixed paces:** 10 minutes per mile running and 20 minutes per mile walking.
 - **Public deployment needs more work.** CORS is unrestricted, the desktop page inserts street names into HTML without escaping, and photo attribution and provenance aren't yet shown in the UI. Check provider requirements before distributing imagery.
 
-## Data and model sources
+## Contributing
+
+Contributions make open source a great place to learn, inspire and create, and any contributions you make are **greatly appreciated**.
+
+If you have a suggestion that would make SolStride better, fork the repo and open a pull request. You can also open an issue with the tag "enhancement". Don't forget to give the project a star. Thanks!
+
+1. Fork the project
+2. Create your feature branch (`git checkout -b feature/AmazingFeature`)
+3. Commit your changes (`git commit -m 'Add some AmazingFeature'`)
+4. Push to the branch (`git push origin feature/AmazingFeature`)
+5. Open a pull request
+
+### Top contributors
+
+<a href="https://github.com/jadenchang01/solstride/graphs/contributors">
+  <img src="https://contrib.rocks/image?repo=jadenchang01/solstride" alt="Top contributors" />
+</a>
+
+## Contact
+
+SolStride was built by its two primary authors:
+
+- **Yunho Song**: [@csong2023](https://github.com/csong2023)
+- **Jaden Chang**: [@jadenchang01](https://github.com/jadenchang01)
+
+Project link: [https://github.com/jadenchang01/solstride](https://github.com/jadenchang01/solstride)
+
+## Acknowledgments: data and model sources
 
 - [OpenStreetMap](https://www.openstreetmap.org/copyright): walk network, building and vegetation features. Keep the attribution and follow the data and tile-service policies.
 - [OpenFreeMap](https://openfreemap.org/): vector basemap tiles (OpenMapTiles schema).
@@ -162,3 +206,33 @@ Expo Go needs the same Expo account signed in on the phone and in the CLI. The p
 - [Open-Meteo](https://open-meteo.com/): weather and elevation inputs.
 - [Mapillary](https://www.mapillary.com/): preferred street-level imagery provider. Keep contributor attribution and follow image-license requirements.
 - [CLIP ViT-B/32](https://huggingface.co/openai/clip-vit-base-patch32): pretrained image–text matching. No project-specific model training is implemented.
+
+<!-- Badge references -->
+[python-badge]: https://img.shields.io/badge/Python-3776AB?style=for-the-badge&logo=python&logoColor=white
+[python-url]: https://www.python.org/
+[fastapi-badge]: https://img.shields.io/badge/FastAPI-009688?style=for-the-badge&logo=fastapi&logoColor=white
+[fastapi-url]: https://fastapi.tiangolo.com/
+[pytorch-badge]: https://img.shields.io/badge/PyTorch-EE4C2C?style=for-the-badge&logo=pytorch&logoColor=white
+[pytorch-url]: https://pytorch.org/
+[hf-badge]: https://img.shields.io/badge/Hugging%20Face%20CLIP-FFD21E?style=for-the-badge&logo=huggingface&logoColor=black
+[hf-url]: https://huggingface.co/openai/clip-vit-base-patch32
+[osmnx-badge]: https://img.shields.io/badge/OSMnx-2E7D32?style=for-the-badge
+[osmnx-url]: https://osmnx.readthedocs.io/
+[networkx-badge]: https://img.shields.io/badge/NetworkX-1F4E79?style=for-the-badge
+[networkx-url]: https://networkx.org/
+[shapely-badge]: https://img.shields.io/badge/Shapely-4B8BBE?style=for-the-badge
+[shapely-url]: https://shapely.readthedocs.io/
+[osm-badge]: https://img.shields.io/badge/OpenStreetMap-7EBC6F?style=for-the-badge&logo=openstreetmap&logoColor=white
+[osm-url]: https://www.openstreetmap.org/
+[leaflet-badge]: https://img.shields.io/badge/Leaflet-199900?style=for-the-badge&logo=leaflet&logoColor=white
+[leaflet-url]: https://leafletjs.com/
+[maplibre-badge]: https://img.shields.io/badge/MapLibre-396CB2?style=for-the-badge&logo=maplibre&logoColor=white
+[maplibre-url]: https://maplibre.org/
+[js-badge]: https://img.shields.io/badge/JavaScript-F7DF1E?style=for-the-badge&logo=javascript&logoColor=black
+[js-url]: https://developer.mozilla.org/docs/Web/JavaScript
+[expo-badge]: https://img.shields.io/badge/Expo-000020?style=for-the-badge&logo=expo&logoColor=white
+[expo-url]: https://expo.dev/
+[rn-badge]: https://img.shields.io/badge/React%20Native-20232A?style=for-the-badge&logo=react&logoColor=61DAFB
+[rn-url]: https://reactnative.dev/
+[mapillary-badge]: https://img.shields.io/badge/Mapillary-05CB63?style=for-the-badge&logo=mapillary&logoColor=white
+[mapillary-url]: https://www.mapillary.com/
