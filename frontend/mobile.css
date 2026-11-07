@@ -135,3 +135,7 @@ h1 { margin: 0; font-size: 26px; letter-spacing: -0.02em; }
   .run-panel { padding-bottom: 26px; }
 
 }
+
+/* Dim the light basemap to sit with the dark UI (route/markers are separate layers, unaffected) */
+.leaflet-gl-layer, .base-tiles { filter: brightness(0.88) contrast(1.03) saturate(0.9); }
+#map { background: #cfccc5; }

@@ -207,3 +207,10 @@ input[type="range"] { width: 100%; accent-color: var(--ink); }
 .photo-popup img { width: 100%; height: auto; border-radius: 8px; margin-bottom: 6px; }
 .photo-popup b { font-size: 13px; display: block; margin-bottom: 3px; }
 .photo-popup p { margin: 0; font-size: 12px; color: var(--muted); }
+
+/* Dim the light basemap in dark mode so it sits with the dark panel */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) .leaflet-gl-layer,
+  :root:not([data-theme="light"]) .base-tiles { filter: brightness(0.88) contrast(1.03) saturate(0.9); }
+}
+:root[data-theme="dark"] .leaflet-gl-layer, :root[data-theme="dark"] .base-tiles { filter: brightness(0.88) contrast(1.03) saturate(0.9); }
