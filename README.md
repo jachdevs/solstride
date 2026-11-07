@@ -106,7 +106,7 @@ A successful route includes `segments`, `stats`, `profile`, `streets`, `sun`, `v
 ## Project structure
 
 ```text
-nova/
+solstride/
 ├── frontend/
 │   ├── index.html       # Desktop page structure and controls
 │   ├── styles.css       # Desktop UI styling
