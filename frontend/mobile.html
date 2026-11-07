@@ -1,0 +1,111 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="theme-color" content="#1b1b21" />
+  <title>SolStride</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><circle cx='16' cy='16' r='13' fill='%23f5a524'/><path d='M16 3a13 13 0 0 1 0 26z' fill='%234c5fd5'/></svg>" />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/maplibre-gl@4.7.1/dist/maplibre-gl.css" />
+  <link rel="stylesheet" href="mobile.css" />
+</head>
+<body>
+  <div class="phone" id="phone">
+    <div id="map"></div>
+
+    <!-- Simulated iOS chrome (laptop frame only; a real phone draws its own) -->
+    <div class="ios-status" aria-hidden="true">
+      <span class="clock" id="clock">9:41</span>
+      <div class="island"></div>
+      <span class="icons">
+        <svg class="loc" id="locIcon" viewBox="0 0 16 16"><path d="M14.6 1.4 1.9 6.9c-.6.3-.5 1.1.1 1.2l5.3 1 1 5.3c.1.6.9.7 1.2.1z"/></svg>
+        <svg viewBox="0 0 18 12"><rect x="0" y="8" width="3" height="4" rx="1"/><rect x="5" y="5.5" width="3" height="6.5" rx="1"/><rect x="10" y="3" width="3" height="9" rx="1"/><rect x="15" y="0" width="3" height="12" rx="1"/></svg>
+        <svg viewBox="0 0 16 12"><path d="M8 11.5 5.6 9a3.4 3.4 0 0 1 4.8 0zM3.5 6.9a6.4 6.4 0 0 1 9 0l-1.4 1.4a4.4 4.4 0 0 0-6.2 0zM1.3 4.7a9.5 9.5 0 0 1 13.4 0l-1.4 1.4a7.5 7.5 0 0 0-10.6 0z"/></svg>
+        <span class="battery"><span></span></span>
+      </span>
+    </div>
+    <div class="home-ind" aria-hidden="true"></div>
+
+    <!-- 1. Setup -->
+    <section class="screen" id="setup">
+      <header class="brand"><span class="logo">◐</span><div><h1>SolStride</h1><p class="muted">Loops that follow the light, or dodge it.</p></div></header>
+      <div class="card" id="env"><span class="muted">Reading the sky…</span></div>
+      <p class="note" id="note"></p>
+
+      <div class="label">Distance</div>
+      <div class="four" id="dist">
+        <button class="chip" data-mi="1">1 mi</button><button class="chip on" data-mi="3">3 mi</button>
+        <button class="chip" data-mi="5">5 mi</button><button class="chip" data-mi="custom">Custom</button>
+      </div>
+      <input id="customMi" class="input hidden" type="number" min="0.5" max="10" step="0.5" value="2" inputmode="decimal" />
+
+      <div class="label">Sun <span class="hint" id="sunHint"></span></div>
+      <div class="two" id="sun">
+        <button class="chip big" data-sun="min">☂ Min sun</button><button class="chip big" data-sun="max">☀ Max sun</button>
+      </div>
+
+      <div class="label">Route vibe &amp; scenery</div>
+      <input id="vibe" class="input" type="text" placeholder="Describe your route (e.g. tree-lined street)…" />
+      <div class="four" id="vibes">
+        <button class="chip sm" data-p="A tree-lined residential street.">🌳 Trees</button>
+        <button class="chip sm" data-p="A pedestrian path through a park.">🌿 Park</button>
+        <button class="chip sm" data-p="A street with a clearly visible sidewalk.">🚶 Sidewalk</button>
+        <button class="chip sm" data-p="A busy multilane road.">🏙️ Urban</button>
+      </div>
+
+      <div class="label">Terrain</div>
+      <div class="three" id="terrain">
+        <button class="chip big on" data-e="0.1">Flat</button><button class="chip big" data-e="0.5">Rolling</button><button class="chip big" data-e="0.9">Hilly</button>
+      </div>
+
+      <button class="btn" id="go">Generate loop</button>
+    </section>
+
+    <!-- 2. Preview -->
+    <section class="screen hidden" id="preview">
+      <div class="map-slot"></div>
+      <div class="stats four" id="stats"></div>
+      <div class="label">Elevation &amp; sun along the loop</div>
+      <svg id="profile" viewBox="0 0 320 100" preserveAspectRatio="none"></svg>
+      <button class="btn" id="start">▶ Start run</button>
+      <div class="two"><button class="btn ghost" id="back">← Back</button><button class="btn ghost" id="again">↻ Try another</button></div>
+    </section>
+
+    <!-- 3. Run -->
+    <section class="screen run hidden" id="run">
+      <div class="run-panel">
+        <p class="off hidden" id="off">Off route: head back to the colored line</p>
+        <div class="timer" id="timer">0:00</div>
+        <div class="stats three-col">
+          <div class="stat"><b id="rMi">0.00</b><span>miles</span></div>
+          <div class="stat"><b id="rPace">--:--</b><span>pace /mi</span></div>
+          <div class="stat"><b id="rPct">0%</b><span>of loop</span></div>
+        </div>
+        <div class="two">
+          <button class="btn ghost" id="pause">❚❚ Pause</button>
+          <button class="btn danger" id="finish"><span class="fill"></span><span class="txt">Hold to finish</span></button>
+        </div>
+        <button class="btn ghost small" id="sim">🛰 Simulate run (laptop demo)</button>
+      </div>
+    </section>
+
+    <!-- 4. Summary -->
+    <section class="screen hidden" id="summary">
+      <h1>Run complete 🎉</h1>
+      <div class="map-slot"></div>
+      <div class="stats" id="sumStats"></div>
+      <button class="btn" id="done">Done</button>
+    </section>
+
+    <div class="loading hidden" id="loading"><div class="orb"><div class="shadow"></div></div><div id="loadingText">Tracing shadows…</div></div>
+  </div>
+
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/maplibre-gl@4.7.1/dist/maplibre-gl.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@maplibre/maplibre-gl-leaflet@0.1.4/leaflet-maplibre-gl.js"></script>
+  <script src="mobile.js"></script>
+</body>
+</html>

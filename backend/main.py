@@ -1,4 +1,4 @@
-"""Nova API: /environment and /route. Also serves the frontend at /."""
+"""SolStride API: /environment and /route. Also serves the frontend at /."""
 
 from __future__ import annotations
 
@@ -20,13 +20,13 @@ from environment import get_environment
 from router import M_PER_MI, generate_loop
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(message)s")
-log = logging.getLogger("nova")
+log = logging.getLogger("solstride")
 
-ROUTE_TIMEOUT_S = float(os.environ.get("NOVA_ROUTE_TIMEOUT", "10"))
+ROUTE_TIMEOUT_S = float(os.environ.get("SOLSTRIDE_ROUTE_TIMEOUT", "10"))
 ROUTING_RESERVE_S = 2.5  # time kept back for routing + serialising
 M_TO_FT = 3.28084
 
-app = FastAPI(title="Nova")
+app = FastAPI(title="SolStride")
 
 
 def _keep_presets_warm():

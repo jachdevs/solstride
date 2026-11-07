@@ -2,7 +2,7 @@
 
 Preset areas (e.g. Pittsburgh/Oakland) are prebuilt offline from an OSM extract by
 build_preset.py and committed under backend/data/, so routes inside them never touch
-Overpass. Starts outside every preset are rejected unless NOVA_ALLOW_LIVE=1, in which
+Overpass. Starts outside every preset are rejected unless SOLSTRIDE_ALLOW_LIVE=1, in which
 case the live, on-demand path below is used.
 
 Live areas is keyed by rounded lat/lng + radius bucket. The three downloads run in
@@ -35,7 +35,7 @@ from shapely.geometry import LineString, Point
 
 from sun import sun_position
 
-log = logging.getLogger("nova.area")
+log = logging.getLogger("solstride.area")
 logging.getLogger("httpx").setLevel(logging.WARNING)
 
 CACHE_DIR = os.path.join(os.path.dirname(__file__), ".cache")
@@ -64,7 +64,7 @@ PRESETS = [
     },
 ]
 PRESET_EDGE_MARGIN_M = 400  # starts this close to the edge leave too little room for a loop
-ALLOW_LIVE = os.environ.get("NOVA_ALLOW_LIVE") == "1"
+ALLOW_LIVE = os.environ.get("SOLSTRIDE_ALLOW_LIVE") == "1"
 
 RADIUS_BUCKET_M = 500
 CASTER_NEAR_EDGE_M = 40  # only cast shadows from things this close to a walkable edge
@@ -387,7 +387,7 @@ def get_area(lat: float, lng: float, radius: float) -> Area:
     """Return an Area covering (lat, lng, radius).
 
     Preset areas are used whenever the start is inside one. Otherwise, live
-    downloads start only if NOVA_ALLOW_LIVE=1.
+    downloads start only if SOLSTRIDE_ALLOW_LIVE=1.
     """
     with _lock:
         p = preset_for(lat, lng)
@@ -395,7 +395,7 @@ def get_area(lat: float, lng: float, radius: float) -> Area:
             return _load_preset(p)
     if not ALLOW_LIVE:
         names = ", ".join(c["label"] for c in coverage()) or "no areas yet"
-        raise OutOfCoverage(f"Nova currently covers {names}. Drop a pin inside that area.")
+        raise OutOfCoverage(f"SolStride currently covers {names}. Drop a pin inside that area.")
     rlat, rlng = round(lat, 3), round(lng, 3)
     need = _bucket(radius)
     with _lock:

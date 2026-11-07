@@ -16,7 +16,7 @@ import time
 import street_view
 from clip_scorer import score_images
 
-log = logging.getLogger("nova.vibe")
+log = logging.getLogger("solstride.vibe")
 
 N_SAMPLES = 5
 RERANK_TOP_K = 3

@@ -13,7 +13,7 @@ from typing import Sequence
 import torch
 from PIL import Image
 
-log = logging.getLogger("nova.clip")
+log = logging.getLogger("solstride.clip")
 
 DEFAULT_BENCHMARK_PROMPTS = [
     "A tree-lined residential street.",

@@ -1,4 +1,4 @@
-// Nova frontend: geolocation -> environment card -> controls -> /route -> map + stats + profile.
+// SolStride frontend: geolocation -> environment card -> controls -> /route -> map + stats + profile.
 // API_BASE is same-origin when served by the backend; override with ?api=http://host:port for split dev.
 const params = new URLSearchParams(location.search);
 const API_BASE = params.get("api") || "";
@@ -136,7 +136,7 @@ async function loadEnvironment() {
     renderEnvironment();
     if (state.env.covered === false) {
       const where = state.coverage.map((a) => a.label).join(", ") || "a supported area";
-      banner(`Nova covers ${where}. Tap the map there to start.`);
+      banner(`SolStride covers ${where}. Tap the map there to start.`);
       $("go").disabled = true;
       if (state.coverage[0]) map.setView([state.coverage[0].lat, state.coverage[0].lng], 13);
     }

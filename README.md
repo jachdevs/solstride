@@ -1,4 +1,4 @@
-# nova
+# SolStride
 
 Sun- and shade-aware running/walking loops that start where you are.
 
@@ -32,7 +32,7 @@ cd backend && ../.venv/bin/pip install osmium
 
 This takes about 2 minutes, offline except for a few elevation requests.
 
-Live, on-demand areas anywhere (downloaded from Overpass, slow and flaky): set `NOVA_ALLOW_LIVE=1`. `warm_cache.py --lat --lng --miles 1 3 5` pre-warms a live area.
+Live, on-demand areas anywhere (downloaded from Overpass, slow and flaky): set `SOLSTRIDE_ALLOW_LIVE=1`. `warm_cache.py --lat --lng --miles 1 3 5` pre-warms a live area.
 
 ## API
 
@@ -47,9 +47,25 @@ Live, on-demand areas anywhere (downloaded from Overpass, slow and flaky): set `
 - **`build_preset.py`**: Crops an OSM `.pbf` extract to a preset area with pyosmium, then builds the graph, shade casters and elevation, and saves `backend/data/<name>.pkl.gz`.
 - **`area.py`**: Presets first. For each live area (rounded lat/lng + radius bucket) three downloads run in parallel: the walk graph (`osmnx.graph_from_point`), shade casters (buildings with `height`/`building:levels`, trees, tree rows and woods), and a 14×14 elevation grid from Open-Meteo, interpolated onto nodes. Shadows are computed live for the current sun position, only for casters within 40 m of a walkable edge. Each shadow is the convex hull of the footprint and the footprint shifted by `height / tan(sun altitude)` away from the sun. Each edge gets a sun fraction. Results are cached per 10 minutes of sun movement. Overpass queries are tiled and fall back across mirrors.
 - **`router.py`**: Builds triangle loops (start → A → B → start) at 8 bearings. Edge cost = length × sun preference × grade preference × reuse penalty, which avoids out-and-backs. The triangle is rescaled until the length is within 8% of the target, and candidates are scored on length error, sun, hills and overlap.
-- **`main.py`**: 10 s budget (`NOVA_ROUTE_TIMEOUT`). If shade or elevation aren't ready in time, it returns a route without them, flags it in `degraded`, and keeps downloading in the background for the next request.
+- **`main.py`**: 10 s budget (`SOLSTRIDE_ROUTE_TIMEOUT`). If shade or elevation aren't ready in time, it returns a route without them, flags it in `degraded`, and keeps downloading in the background for the next request.
 - **`sun.py`**: NOAA solar position. **`environment.py`**: weather and sun-mode suggestion.
 
 ## Frontend (frontend/)
 
 Plain HTML/JS with Leaflet and no build step. Geolocation with a drop-a-pin fallback, an environment card with a sun compass, distance chips, a pre-filled sun toggle, a terrain slider, a "Tracing shadows…" loading state, a route colored shade (blue) → sun (amber), stats, an elevation profile with a sun/shade ribbon and street photos.
+
+## Mobile web version (quickest to demo)
+
+Open <http://localhost:8765/mobile.html>. On a laptop it shows in an iPhone-style frame. Flow: Setup → Preview → Run → Summary, with no scrolling. On the Run screen, **🛰 Simulate run** moves a fake GPS position along the loop (20× speed) so you can demo the timer, pace and progress without moving. On a real phone, open the same page over HTTPS (e.g. the Cloudflare tunnel below) to use real GPS.
+
+## Mobile app (mobile/, Expo)
+
+Setup → Preview → Run (timer, distance, pace, % of loop, off-route warning, hold to finish) → Summary (including how much of the run was in shade). It uses the same backend.
+
+```bash
+cloudflared tunnel --url http://127.0.0.1:8765        # prints https://<random>.trycloudflare.com
+echo "EXPO_PUBLIC_API_BASE=https://<random>.trycloudflare.com" > mobile/.env
+cd mobile && npm install && npx expo start             # scan the QR with the iPhone camera (Expo Go app)
+```
+
+The phone and laptop must be on the same Wi-Fi for the app itself (Metro). If the venue blocks that, use `npx expo start --tunnel`. Expo Go keeps GPS running by keeping the screen awake. GPS with the screen locked needs a development build (`eas build --profile development`).

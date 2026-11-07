@@ -22,7 +22,7 @@ from typing import Sequence
 import httpx
 from PIL import Image
 
-log = logging.getLogger("nova.streetview")
+log = logging.getLogger("solstride.streetview")
 
 
 def _load_env() -> None:
