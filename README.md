@@ -185,8 +185,8 @@ If you have a suggestion that would make SolStride better, fork the repo and ope
 
 ### Top contributors
 
-<a href="https://github.com/jadenchang01/solstride/graphs/contributors">
-  <img src="https://contrib.rocks/image?repo=jadenchang01/solstride" alt="Top contributors" />
+<a href="https://github.com/jachdevs/solstride/graphs/contributors">
+  <img src="https://contrib.rocks/image?repo=jachdevs/solstride" alt="Top contributors" />
 </a>
 
 ## Contact
@@ -196,7 +196,7 @@ SolStride was built by its two primary authors:
 - **Yunho Song**: [@csong2023](https://github.com/csong2023)
 - **Jaden Chang**: [@jadenchang01](https://github.com/jadenchang01)
 
-Project link: [https://github.com/jadenchang01/solstride](https://github.com/jadenchang01/solstride)
+Project link: [https://github.com/jachdevs/solstride](https://github.com/jachdevs/solstride)
 
 ## Acknowledgments: data and model sources
 
